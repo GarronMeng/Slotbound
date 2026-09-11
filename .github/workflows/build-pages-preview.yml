@@ -28,11 +28,26 @@ jobs:
       - name: Build game
         run: npm run build
 
+      - name: Validate XHS package
+        run: npm run check
+
+      - name: Pack XHS minitool
+        run: npm run pack
+
       - name: Verify build output
         run: |
           test -f dist/minitool/index.html
           test -f dist/minitool/js/app.js
           test -f dist/minitool/css/style.css
+          test -f dist/slotbound-xhs-minitool.zip
+
+      - name: Upload XHS submission ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: slotbound-xhs-minitool
+          path: dist/slotbound-xhs-minitool.zip
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Publish static build to gh-pages
         shell: bash
