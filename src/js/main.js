@@ -12,11 +12,13 @@ import { installStrategyLayer } from './strategy.js';
 import { installSafeAreaFix } from './safearea.js';
 import { installProgression } from './progression.js';
 import { installV14 } from './v14.js';
+import { installV15 } from './v15.js';
 
 installStrategyLayer(Game);
 installSafeAreaFix(Game);
 installProgression(Game);
 installV14(Game);
+installV15(Game);
 
 var STEP = 1 / 60;
 var MAX_SUB = 4;
@@ -32,6 +34,7 @@ function boot() {
   var set = Store.settings();
   ui.setMuted(!!set.muted);
 
+  // ---------- 尺寸 ----------
   function resize() {
     var host = document.getElementById('stage');
     var w = host.clientWidth || window.innerWidth;
@@ -44,6 +47,7 @@ function boot() {
   window.addEventListener('resize', resize);
   window.addEventListener('orientationchange', function () { setTimeout(resize, 120); });
 
+  // ---------- 坐标换算 ----------
   function toLogical(cx, cy) {
     var r = canvas.getBoundingClientRect();
     var s = game.scale || 1;
@@ -53,7 +57,8 @@ function boot() {
     };
   }
 
-  // 轻点单位 = 查看/锁定/主养/进化；拖动 = 调整阵型。
+  // ---------- 指针输入 ----------
+  // 轻点单位 = 查看/锁定/进化；拖动 = 调整阵型。
   var pointerDown = false;
   var pointerStartX = 0, pointerStartY = 0;
   var pointerMoved = false;
@@ -137,6 +142,7 @@ function boot() {
     window.addEventListener('mouseup', function (e) { onUp(e.clientX, e.clientY); });
   }
 
+  // ---------- 键盘 ----------
   window.addEventListener('keydown', function (e) {
     var k = e.key;
     var code = e.keyCode;
@@ -149,7 +155,6 @@ function boot() {
       else if (game.state === STATE.PLAY) game.spin();
     } else if (k === 'Enter') {
       if (game.state === STATE.TITLE || game.state === STATE.OVER || game.state === STATE.WIN) ui.startGame();
-      else if (game.state === STATE.PLAY && game._prep) game.beginPreparedWave();
       else if (game.state === STATE.PLAY) toggleHold();
     } else if (k === 'ArrowLeft' || k === 'a' || k === 'A') {
       moveCursor(-1, 0);
@@ -199,13 +204,15 @@ function boot() {
     }
   }
 
+  // ---------- 失焦自动暂停 ----------
   document.addEventListener('visibilitychange', function () {
-    if (document.hidden && game.state === STATE.PLAY && !game._prep) game.togglePause(true);
+    if (document.hidden && game.state === STATE.PLAY) game.togglePause(true);
   });
   window.addEventListener('blur', function () {
-    if (game.state === STATE.PLAY && !game._prep) game.togglePause(true);
+    if (game.state === STATE.PLAY) game.togglePause(true);
   });
 
+  // 首次交互解锁音频 + 启动音乐
   function firstGesture() {
     if (Sfx.init() && !ui.muted && game.state === STATE.PLAY) Music.start();
     window.removeEventListener('touchstart', firstGesture);
@@ -220,6 +227,7 @@ function boot() {
     if (!ui.muted) Music.start();
   };
 
+  // ---------- 主循环 ----------
   var last = 0, acc = 0;
   function frame(ts) {
     window.requestAnimationFrame(frame);
