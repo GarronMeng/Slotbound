@@ -61,6 +61,11 @@ jobs:
           cp -a dist/minitool/. /tmp/slotbound-pages/
           touch /tmp/slotbound-pages/.nojekyll
 
+          # Pages 专用 cache bust；不修改已经校验/打包的小红书 ZIP。
+          VERSION="${GITHUB_SHA:0:8}"
+          sed -i "s#./js/app.js#./js/app.js?v=${VERSION}#g" /tmp/slotbound-pages/index.html
+          sed -i "s#./css/style.css#./css/style.css?v=${VERSION}#g" /tmp/slotbound-pages/index.html
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout --orphan gh-pages
