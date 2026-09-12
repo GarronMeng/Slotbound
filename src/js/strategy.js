@@ -1,4 +1,4 @@
-// strategy.js — v1.1 智能合成 / 高压车道 / 阵型策略 / 战场安全区
+// strategy.js — v1.2 自动吸收 / 五人主力 / 高压车道 / 阵型策略
 'use strict';
 
 import { Unit, Enemy } from './entities.js';
@@ -10,6 +10,7 @@ var INSTALLED = false;
 var ROW_PREF = { guard: 0, sword: 1, mage: 2, bow: 3, cannon: 3, prism: 2 };
 var RANGED = { bow: 1, mage: 1, cannon: 1, prism: 1 };
 var LANE_NAME = ['左路', '中路', '右路'];
+var MAX_LEVEL = 5;
 
 function roleScore(u) {
   var pref = ROW_PREF[u.type] === undefined ? 2 : ROW_PREF[u.type];
@@ -19,25 +20,152 @@ function roleScore(u) {
   return rowFit + killFit + hpFit;
 }
 
-function groupPairs(game, type) {
-  var groups = {}, i, u, key;
-  for (i = 0; i < game.units.length; i++) {
-    u = game.units[i];
-    if (!u || u.dead || u.held || u.level >= 5) continue;
-    if (type && u.type !== type) continue;
-    key = u.type + ':' + u.level;
-    if (!groups[key]) groups[key] = [];
-    groups[key].push(u);
+// 吸收质量完全守恒：Lv1=1，Lv2=2，Lv3=4，Lv4=8，Lv5=16。
+// 因此 Lv4 吃 Lv2 会得到 10/16，而不是粗暴直接升 Lv5。
+function baseMass(level) {
+  return Math.pow(2, Math.max(0, Math.min(MAX_LEVEL, level) - 1));
+}
+
+function unitMass(u) {
+  var floor = baseMass(u.level || 1);
+  if (u._absorbMass === undefined || !isFinite(u._absorbMass) || u._absorbMass < floor) u._absorbMass = floor;
+  return u._absorbMass;
+}
+
+function levelForMass(mass) {
+  var lv = 1;
+  while (lv < MAX_LEVEL && mass >= baseMass(lv + 1)) lv++;
+  return lv;
+}
+
+function activeUnits(game) {
+  var out = [];
+  for (var i = 0; i < game.units.length; i++) {
+    var u = game.units[i];
+    if (u && !u.dead) out.push(u);
   }
-  var best = null, k, list, a, b, score;
-  for (k in groups) {
-    list = groups[k];
+  return out;
+}
+
+function boardCap(game) {
+  var n = game.mods && game.mods.boardCap ? game.mods.boardCap : 5;
+  return Math.max(1, Math.min(6, Math.round(n)));
+}
+
+function removeUnit(game, u) {
+  if (!u) return;
+  if (game.grid[u.col] && game.grid[u.col][u.row] === u) game.grid[u.col][u.row] = null;
+  var i = game.units.indexOf(u);
+  if (i >= 0) game.units.splice(i, 1);
+  if (game.held === u) game.held = null;
+  u.dead = true;
+}
+
+function absorbProgress(u) {
+  if (u.level >= MAX_LEVEL) return 1;
+  var lo = baseMass(u.level);
+  var hi = baseMass(u.level + 1);
+  return Math.max(0, Math.min(1, (unitMass(u) - lo) / Math.max(1, hi - lo)));
+}
+
+function absorptionFx(game, dst, oldLevel, sourceLabel) {
+  var L = game.L;
+  var leveled = dst.level > oldLevel;
+  var p = Math.round(absorbProgress(dst) * 100);
+  dst.pop = leveled ? 1.75 : 1.35;
+  FX.ring(dst.x, dst.y, L.cellW * (leveled ? 0.95 : 0.72), dst.color, leveled ? 0.45 : 0.3, leveled ? 6 : 4);
+  FX.burst(dst.x, dst.y, { count: leveled ? 24 : 12, speed: leveled ? 235 : 145, colors: [dst.color, '#ffffff'], life: 0.5, size: 4, grav: 100 });
+  if (leveled) {
+    FX.text(dst.x, dst.y - L.cellH * 0.52, '自动吸收 → Lv' + dst.level, { color: C.gold, size: 21, life: 1.0, glow: 1 });
+    FX.shake(7, 0.22);
+    FX.flash(0.12, '#ffffff');
+    Sfx.merge(dst.level);
+    game.addScore(40 * dst.level, dst.x, dst.y - L.cellH * 0.8, C.gold);
+  } else {
+    var txt = dst.level >= MAX_LEVEL ? '已满级' : ('吸收进度 ' + p + '%');
+    FX.text(dst.x, dst.y - L.cellH * 0.48, txt, { color: dst.color, size: 16, life: 0.75, glow: 1 });
+    Sfx.uiTap();
+  }
+  if (sourceLabel && game.ui && game.ui.toast) game.ui.toast(sourceLabel + ' → ' + (UNITS[dst.type] ? UNITS[dst.type].name : dst.type));
+}
+
+function addMass(game, dst, amount, sourceLabel) {
+  if (!dst || dst.dead || amount <= 0) return false;
+  var oldLevel = dst.level;
+  var maxMass = baseMass(MAX_LEVEL);
+  var before = unitMass(dst);
+  if (before >= maxMass) return false;
+  dst._absorbMass = Math.min(maxMass, before + amount);
+  dst.level = levelForMass(dst._absorbMass);
+  dst.applyLevel(game.mods);
+  if (dst.level > oldLevel) dst.fullHeal();
+  else dst.hp = Math.min(dst.maxHp, dst.hp + dst.maxHp * 0.08);
+  if (game.mods.unitRegen) dst._regen = 1;
+  game.merges++;
+  absorptionFx(game, dst, oldLevel, sourceLabel);
+  game._smartMergeT = 0.10;
+  return true;
+}
+
+function absorbUnit(game, src, dst, auto) {
+  if (!src || !dst || src === dst || src.dead || dst.dead) return false;
+  if (src.type !== dst.type) {
+    if (!auto) game.toast('不同兵种只能交换位置');
+    return false;
+  }
+  var amount = unitMass(src);
+  var label = (UNITS[src.type] ? UNITS[src.type].name : src.type) + '自动吸收';
+  FX.burst(src.x, src.y, { count: 14, speed: 175, color: src.color, life: 0.45, size: 4 });
+  removeUnit(game, src);
+  return addMass(game, dst, amount, label);
+}
+
+function sameTypeCarry(game, type) {
+  var list = activeUnits(game).filter(function (u) { return u.type === type && unitMass(u) < baseMass(MAX_LEVEL); });
+  if (!list.length) return null;
+  list.sort(function (a, b) {
+    var dm = unitMass(b) - unitMass(a);
+    return dm || (roleScore(b) - roleScore(a));
+  });
+  return list[0];
+}
+
+function weakestFeedTarget(game) {
+  var list = activeUnits(game).filter(function (u) { return unitMass(u) < baseMass(MAX_LEVEL); });
+  if (!list.length) return null;
+  list.sort(function (a, b) {
+    var dm = unitMass(a) - unitMass(b);
+    return dm || (roleScore(a) - roleScore(b));
+  });
+  return list[0];
+}
+
+function duplicatePair(game) {
+  var groups = {}, i, u;
+  var units = activeUnits(game);
+  for (i = 0; i < units.length; i++) {
+    u = units[i];
+    if (u.held) continue;
+    if (!groups[u.type]) groups[u.type] = [];
+    groups[u.type].push(u);
+  }
+  var best = null, type, list, dst, src, score;
+  for (type in groups) {
+    list = groups[type];
     if (list.length < 2) continue;
-    list.sort(function (x, y) { return roleScore(y) - roleScore(x); });
-    a = list[0];
-    b = list[1];
-    score = a.level * 100 + roleScore(a);
-    if (!best || score > best.score) best = { src: b, dst: a, score: score };
+    list.sort(function (a, b) {
+      var dm = unitMass(b) - unitMass(a);
+      return dm || (roleScore(b) - roleScore(a));
+    });
+    dst = list[0];
+    src = list[list.length - 1];
+    if (unitMass(dst) >= baseMass(MAX_LEVEL)) {
+      // 满级主力不再吞材料，尝试把其他同类互相合并。
+      if (list.length < 3) continue;
+      dst = list[1]; src = list[list.length - 1];
+    }
+    score = unitMass(src) + unitMass(dst) * 10;
+    if (!best || score > best.score) best = { src: src, dst: dst, score: score };
   }
   return best;
 }
@@ -53,47 +181,19 @@ function swapUnits(game, a, b) {
   Sfx.uiTap();
 }
 
-function promoteIncoming(game, dst) {
-  if (!dst || dst.level >= 5) return false;
-  dst.level++;
-  dst.applyLevel(game.mods);
-  dst.fullHeal();
-  if (game.mods.unitRegen) dst._regen = 1;
-  dst.pop = 1.75;
-  game.merges++;
-  var L = game.L;
-  FX.ring(dst.x, dst.y, L.cellW * 0.95, dst.color, 0.45, 6);
-  FX.ring(dst.x, dst.y, L.cellW * 0.6, '#ffffff', 0.3, 3);
-  FX.burst(dst.x, dst.y, { count: 24, speed: 235, colors: [dst.color, '#ffffff'], life: 0.6, size: 5, grav: 120 });
-  FX.text(dst.x, dst.y - L.cellH * 0.5, '自动合成 · Lv' + dst.level, { color: C.gold, size: 21, life: 1.0, glow: 1 });
-  FX.shake(8, 0.25);
-  FX.flash(0.16, '#ffffff');
-  Sfx.merge(dst.level);
-  game.addScore(40 * dst.level, dst.x, dst.y - L.cellH * 0.8, C.gold);
-  game._smartMergeT = 0.14;
-  return true;
-}
-
 function laneDoctrine(game, c) {
-  var lane = [], r, u, front = null, ranged = 0, rear = 0;
+  var lane = [], r, u, front = null, ranged = 0;
   for (r = 0; r < game.grid[c].length; r++) {
     u = game.grid[c][r];
     if (!u || u.dead) continue;
     lane.push(u);
     if (!front) front = u;
-    if (RANGED[u.type]) { ranged++; rear++; }
+    if (RANGED[u.type]) ranged++;
   }
   if (!lane.length) return null;
-
-  if (front && front.type === 'guard' && ranged >= 1) {
-    return { id: 'wall', name: '盾阵', color: C.green, desc: '前排减伤 · 后排攻速', units: lane };
-  }
-  if (ranged >= 3) {
-    return { id: 'fire', name: '火力网', color: C.cyan, desc: '本路远程伤害 +20%', units: lane };
-  }
-  if (front && front.type === 'sword' && ranged >= 2) {
-    return { id: 'rush', name: '突击线', color: C.gold, desc: '剑士爆发 · 后排增伤', units: lane };
-  }
+  if (front && front.type === 'guard' && ranged >= 1) return { id: 'wall', name: '盾阵', color: C.green, desc: '前排减伤 · 后排攻速', units: lane };
+  if (ranged >= 3) return { id: 'fire', name: '火力网', color: C.cyan, desc: '本路远程伤害 +20%', units: lane };
+  if (front && front.type === 'sword' && ranged >= 2) return { id: 'rush', name: '突击线', color: C.gold, desc: '剑士爆发 · 后排增伤', units: lane };
   return null;
 }
 
@@ -101,6 +201,7 @@ function refreshFormations(game) {
   var i, u, c, doc;
   for (i = 0; i < game.units.length; i++) {
     u = game.units[i];
+    if (!u || u.dead) continue;
     if (u._strategyBaseDmg === undefined) u._strategyBaseDmg = u.dmg;
     if (u._strategyBaseRate === undefined) u._strategyBaseRate = u.rate;
     u.dmg = u._strategyBaseDmg;
@@ -131,10 +232,11 @@ function refreshFormations(game) {
 
 function smartMergeStep(game) {
   if (game.held) return false;
-  var pair = groupPairs(game);
+  var pair = duplicatePair(game);
   if (!pair) { game._smartMergeT = -1; return false; }
-  if (game.doMerge(pair.src, pair.dst, true)) {
-    game._smartMergeT = 0.14;
+  if (absorbUnit(game, pair.src, pair.dst, true)) {
+    refreshFormations(game);
+    game._smartMergeT = 0.10;
     return true;
   }
   game._smartMergeT = -1;
@@ -144,11 +246,7 @@ function smartMergeStep(game) {
 function applyBattlefieldSafeArea(game) {
   var L = game.L;
   if (!L || !L.fieldBottom) return;
-
-  // HUD 是 DOM 覆盖层，CSS 像素不会跟着 Canvas 逻辑坐标缩放。
-  // 84px 对应 HUD + 核心血条的实际高度，再留一段呼吸空间。
   var hudSafe = Math.max(124, 84 / Math.max(0.45, game.scale || 1));
-  // 不侵占棋盘主体；极端矮屏至少保留一小段出生行军区。
   var maxTop = Math.max(104, L.gridY - 44);
   L.fieldTop = Math.min(hudSafe, maxTop);
   L.fieldH = Math.max(1, L.fieldBottom - L.fieldTop);
@@ -181,6 +279,13 @@ function drawStrategyOverlay(game, ctx) {
     ctx.fillStyle = C.magenta;
     ctx.fillText('高压', x + L.cellW / 2, L.fieldTop + 15);
   }
+
+  // 只显示一个很轻的主力人数提示，强调“5 人小队”而不是把 12 格塞满。
+  var alive = activeUnits(game).length;
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  ctx.font = '800 12px ' + game.font;
+  ctx.fillStyle = 'rgba(255,255,255,0.58)';
+  ctx.fillText('主力 ' + alive + '/' + boardCap(game), L.gridX + 4, L.fieldBottom - 16);
 
   for (c = 0; c < 3; c++) {
     doc = game._laneDoctrine && game._laneDoctrine[c];
@@ -230,7 +335,6 @@ export function installStrategyLayer(Game) {
     return origHurt.call(this, dmg * (this._formationTaken || 1), game);
   };
 
-  // 敌人到核心前按完整碰撞体停住，避免大型怪物下半身进入老虎机 UI。
   var origEnemyUpdate = Enemy.prototype.update;
   Enemy.prototype.update = function (dt, game) {
     origEnemyUpdate.call(this, dt, game);
@@ -252,68 +356,62 @@ export function installStrategyLayer(Game) {
     if (this.banner) this.banner.sub += ' · ' + LANE_NAME[this._pressureLane] + '高压';
   };
 
-  var origDoMerge = Game.prototype.doMerge;
+  // 同兵种不再要求同等级；按“质量”吸收，完整保留成长价值。
   Game.prototype.doMerge = function (src, dst, auto) {
-    if (!src || !dst || src === dst) return false;
-    if (src.type !== dst.type) return false;
-    if (src.level !== dst.level) {
-      if (!auto) this.toast('同兵种同等级才能合成');
-      return false;
-    }
-    if (dst.level >= 5) return false;
-    var ok = origDoMerge.call(this, src, dst, auto);
-    if (ok) {
-      this._smartMergeT = 0.14;
-      refreshFormations(this);
-    }
+    var ok = absorbUnit(this, src, dst, auto);
+    if (ok) refreshFormations(this);
     return ok;
   };
 
   var origPlaceUnit = Game.prototype.placeUnit;
   Game.prototype.placeUnit = function (type, withFx) {
-    if (this.emptyCells().length === 0) {
-      var existing = groupPairs(this);
-      if (existing) this.doMerge(existing.src, existing.dst, true);
+    // 1) 场上已有同兵种：新兵直接作为材料，不再生成第二个重复单位。
+    var carry = sameTypeCarry(this, type);
+    if (carry) {
+      addMass(this, carry, 1, (UNITS[type] ? UNITS[type].name : type) + '新兵自动吸收');
+      refreshFormations(this);
+      return carry;
     }
 
-    if (this.emptyCells().length === 0) {
-      var best = null;
-      for (var i = 0; i < this.units.length; i++) {
-        var u = this.units[i];
-        if (u.type === type && u.level === 1 && !u.dead && !u.held) {
-          if (!best || roleScore(u) > roleScore(best)) best = u;
-        }
+    // 2) 未达到 Slotbound 风格主力上限：正常加入队伍。
+    var alive = activeUnits(this);
+    if (alive.length < boardCap(this)) {
+      var placed = origPlaceUnit.call(this, type, withFx);
+      if (placed) {
+        placed._absorbMass = baseMass(placed.level);
+        this._smartMergeT = 0.08;
       }
-      if (best) {
-        promoteIncoming(this, best);
-        refreshFormations(this);
-        return best;
-      }
-      this.addScore(120, this.L.slotCX, this.L.gridY - 30, C.cyan);
-      this.toast('战场已满 · 无可合成单位 +120');
-      return null;
+      refreshFormations(this);
+      return placed;
     }
 
-    var placed = origPlaceUnit.call(this, type, withFx);
-    if (placed) this._smartMergeT = 0.12;
-    refreshFormations(this);
-    return placed;
+    // 3) 已满员：新抽到的兵自动成为吸收材料，优先补最弱的非满级主力。
+    var target = weakestFeedTarget(this);
+    if (target) {
+      addMass(this, target, 1, (UNITS[type] ? UNITS[type].name : type) + '材料自动吸收');
+      refreshFormations(this);
+      return target;
+    }
+
+    // 全员 Lv5 后，多余召唤转换为分数，避免死循环或无反馈。
+    this.addScore(180, this.L.slotCX, this.L.gridY - 30, C.cyan);
+    this.toast('主力全员满级 · 多余召唤 +180');
+    return null;
   };
 
   var origTryDrop = Game.prototype.tryDrop;
   Game.prototype.tryDrop = function (u, c, r) {
     if (c < 0 || c >= this.grid.length || r < 0 || r >= this.grid[c].length) return false;
     var target = this.grid[c][r];
-    if (target && target !== u && target.type === u.type && target.level !== u.level) {
-      swapUnits(this, u, target);
-      refreshFormations(this);
-      return true;
+    if (target && target !== u && target.type === u.type) {
+      var src = unitMass(u) <= unitMass(target) ? u : target;
+      var dst = src === u ? target : u;
+      var okAbsorb = absorbUnit(this, src, dst, false);
+      if (okAbsorb) refreshFormations(this);
+      return okAbsorb;
     }
     var ok = origTryDrop.call(this, u, c, r);
-    if (ok) {
-      this._smartMergeT = 0.12;
-      refreshFormations(this);
-    }
+    if (ok) refreshFormations(this);
     return ok;
   };
 
@@ -334,7 +432,6 @@ export function installStrategyLayer(Game) {
     drawStrategyOverlay(this, ctx);
   };
 
-  // 敌人只允许画在战场可视区；出生阶段和核心阶段都不会穿到 DOM HUD / 底部老虎机下面。
   var origDrawEnemies = Game.prototype.drawEnemies;
   Game.prototype.drawEnemies = function (ctx) {
     var self = this;
