@@ -1,4 +1,4 @@
-// strategy-smoke.mjs — v1.1 智能合成 / 阵型 / 高压车道 / 安全区运行验证
+// strategy-smoke.mjs — v1.2 自动吸收 / 五人主力 / 阵型 / 高压车道 / 安全区运行验证
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -63,10 +63,13 @@ function clearUnits() {
   game.units.length = 0;
   for (let c = 0; c < game.grid.length; c++) for (let r = 0; r < game.grid[c].length; r++) game.grid[c][r] = null;
 }
+function mass(u) { return u._absorbMass === undefined ? Math.pow(2, u.level - 1) : u._absorbMass; }
+function active() { return game.units.filter(u => u && !u.dead); }
 
 ui.startGame();
 assert('进入 PLAY', game.state === STATE.PLAY);
 assert('策略层已安装', Array.isArray(game._laneDoctrine));
+assert('五人主力上限默认生效', game.mods.boardCap === 5, game.mods.boardCap);
 assert('安全区 v3 已安装', game.L.safeAreaVersion === 3, game.L.safeAreaVersion);
 assert('战场顶部位于 HUD 下方', game.L.fieldTop >= 132, game.L.fieldTop);
 
@@ -77,44 +80,64 @@ assert('怪物出生时完整身体位于安全区内', probe.y - probeRadius >=
 const probeIdx = game.enemies.live.indexOf(probe);
 if (probeIdx >= 0) { game.enemies.live.splice(probeIdx, 1); game.enemies.free.push(probe); }
 
-// 固定用较大波次验证高压路，避免拿开局剩余 3 个敌人的小样本做随机比例。
 game.startWave(7);
 assert('高压车道已生成', game._pressureLane >= 0 && game._pressureLane <= 2, game._pressureLane);
 let pressure = 0;
 for (const q of game.queue) if (q.lane === game._pressureLane) pressure++;
 assert('高压车道敌人占比明显更高', pressure / Math.max(1, game.queue.length) >= 0.45, pressure + '/' + game.queue.length);
 
+// 同兵种新兵不再占格：4 个 Lv1 炮手直接收敛成 1 个 Lv3。
 clearUnits();
 for (let i = 0; i < 4; i++) game.placeUnit('cannon');
-assert('4 个单位已落位', game.units.length === 4, game.units.length);
-frames(45);
-const cannons = game.units.filter(u => u.type === 'cannon');
-assert('自动链式合成收敛', cannons.length === 1, cannons.map(u => u.level).join(','));
-assert('4×Lv1 合成到 Lv3', cannons[0].level === 3, cannons[0].level);
+const cannons = active().filter(u => u.type === 'cannon');
+assert('重复兵种立即自动吸收', cannons.length === 1, cannons.length);
+assert('4×Lv1 质量守恒到 Lv3', cannons[0].level === 3 && mass(cannons[0]) === 4,
+  `lv=${cannons[0].level} mass=${mass(cannons[0])}`);
 
+// 不同等级也能吸收且保留进度：再来 2 个 Lv1，只会把 Lv3 的质量从4推到6，不会粗暴跳级。
+game.placeUnit('cannon');
+game.placeUnit('cannon');
+assert('跨等级自动吸收不新增格子', active().length === 1, active().length);
+assert('跨等级吸收保留部分进度', cannons[0].level === 3 && mass(cannons[0]) === 6,
+  `lv=${cannons[0].level} mass=${mass(cannons[0])}`);
+
+// 五人满编后，第六种兵种作为材料，而不是占满第六格。
 clearUnits();
-const a = game.placeUnit('bow');
+const five = ['guard', 'sword', 'bow', 'mage', 'cannon'];
+for (const t of five) game.placeUnit(t);
+assert('五种主力组成 5/5', active().length === 5, active().length);
+const totalBefore = active().reduce((s, u) => s + mass(u), 0);
+game.placeUnit('prism');
+const totalAfter = active().reduce((s, u) => s + mass(u), 0);
+assert('满编后新兵不再占格', active().length === 5, active().length);
+assert('满编材料完整转为成长质量', totalAfter === totalBefore + 1, `${totalBefore}->${totalAfter}`);
+
+// 同兵种在满编时优先喂对应主力。
+const guard = active().find(u => u.type === 'guard');
+const guardBefore = mass(guard);
+game.placeUnit('guard');
+assert('同兵种材料优先喂对应主力', mass(guard) === guardBefore + 1, `${guardBefore}->${mass(guard)}`);
+assert('自动吸收后仍保持 5 人', active().length === 5, active().length);
+
+// 扩编核心把上限提高到6；随后缺失的棱晶可以真正入场。
+game.mods.boardCap = 6;
+game.placeUnit('prism');
+assert('扩编后允许第6名主力', active().length === 6, active().length);
+assert('第6名可为新兵种', active().some(u => u.type === 'prism'));
+
+// 阵型仍可用：盾卫前排 + 远程后排。
+clearUnits();
+game.mods.boardCap = 5;
+const g = game.placeUnit('guard');
 const b = game.placeUnit('bow');
-game.doMerge(a, b, true);
-const lv2 = b;
-const lv1 = game.placeUnit('bow');
-const lv1Level = lv1.level, lv2Level = lv2.level;
-const lv1Cell = { c: lv1.col, r: lv1.row }, lv2Cell = { c: lv2.col, r: lv2.row };
-game.tryDrop(lv1, lv2Cell.c, lv2Cell.r);
-assert('跨级不会吞并 Lv1', lv1.level === lv1Level, lv1.level);
-assert('跨级不会升级 Lv2', lv2.level === lv2Level, lv2.level);
-assert('跨级操作改为交换', game.grid[lv2Cell.c][lv2Cell.r] === lv1 && game.grid[lv1Cell.c][lv1Cell.r] === lv2);
-
-clearUnits();
-const guard = game.placeUnit('guard');
-const bow = game.placeUnit('bow');
-if (guard.col !== 1 || guard.row !== 0) game.tryDrop(guard, 1, 0);
-if (bow.col !== 1 || bow.row !== 3) game.tryDrop(bow, 1, 3);
+if (g.col !== 1 || g.row !== 0) game.tryDrop(g, 1, 0);
+if (b.col !== 1 || b.row !== 3) game.tryDrop(b, 1, 3);
 frames(2);
 assert('盾阵被识别', game._laneDoctrine[1] && game._laneDoctrine[1].id === 'wall', game._laneDoctrine[1] && game._laneDoctrine[1].id);
-assert('盾卫获得减伤', guard._formationTaken < 1, guard._formationTaken);
-assert('后排获得攻速', bow.rate < bow._strategyBaseRate, bow.rate + '<' + bow._strategyBaseRate);
+assert('盾卫获得减伤', g._formationTaken < 1, g._formationTaken);
+assert('后排获得攻速', b.rate < b._strategyBaseRate, b.rate + '<' + b._strategyBaseRate);
 
+// 火力网仍由不同远程兵种组成，不依赖重复单位。
 clearUnits();
 const r1 = game.placeUnit('bow');
 const r2 = game.placeUnit('mage');
@@ -126,6 +149,7 @@ frames(2);
 assert('火力网被识别', game._laneDoctrine[2] && game._laneDoctrine[2].id === 'fire', game._laneDoctrine[2] && game._laneDoctrine[2].id);
 assert('火力网提高远程伤害', r1.dmg > r1._strategyBaseDmg, r1.dmg + '>' + r1._strategyBaseDmg);
 
+// 奖励页退出后继续验证 iOS 布局恢复。
 const scaleBeforeReward = game.scale;
 const expectedCanvasW = 390 * 2;
 game.openReward();
@@ -135,7 +159,7 @@ assert('选卡后回到 PLAY', game.state === STATE.PLAY);
 assert('选卡后 scale 保持手机布局', Math.abs(game.scale - scaleBeforeReward) < 0.001, game.scale + ' vs ' + scaleBeforeReward);
 assert('选卡后 px 与 scale×DPR 一致', Math.abs(game.px - game.scale * game.dpr) < 0.001, game.px + ' vs ' + (game.scale * game.dpr));
 assert('选卡后 Canvas 恢复完整宽度', game.canvas.width === expectedCanvasW, game.canvas.width + ' vs ' + expectedCanvasW);
-for (const u of game.units) {
+for (const u of active()) {
   const ex = game.L.gridX + (u.col + 0.5) * game.L.cellW;
   const ey = game.L.gridY + (u.row + 0.5) * game.L.cellH;
   assert('选卡后单位格子坐标同步', Math.abs(u.x - ex) < 0.01 && Math.abs(u.y - ey) < 0.01, u.type + ':' + u.x + ',' + u.y);
