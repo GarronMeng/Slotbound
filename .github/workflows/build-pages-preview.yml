@@ -43,6 +43,9 @@ jobs:
       - name: Smoke test v1.6 focus UX automation
         run: node tools/v16-smoke.mjs
 
+      - name: Smoke test v1.7 juice density
+        run: node tools/v17-smoke.mjs
+
       - name: Validate XHS package
         run: npm run check
 
@@ -84,5 +87,5 @@ jobs:
           git rm -rf .
           cp -a /tmp/slotbound-pages/. .
           git add -A
-          git commit -m "Deploy v1.6 preview to GitHub Pages"
+          git commit -m "Deploy v1.7 preview to GitHub Pages"
           git push --force origin HEAD:gh-pages
