@@ -75,6 +75,7 @@ export var CARD_POOL = [
   { id: 'hp', name: '磐石核心', desc: '全体生命 +25%', icon: '生', color: '#57ff9a', apply: function (m) { m.hp *= 1.25; } },
   { id: 'core', name: '堡垒核心', desc: '核心上限 +30 并回满', icon: '堡', color: '#57ff9a', apply: function (m) { m.coreMax += 30; m.coreHeal = 999; } },
   { id: 'energy', name: '涌能核心', desc: '能量上限 +1', icon: '能', color: '#a86bff', apply: function (m) { m.energyMax += 1; m.energyGain = 1; } },
+  { id: 'capacity', name: '扩编核心', desc: '主力上限 5 → 6', icon: '编', color: '#29e0ff', apply: function (m) { m.boardCap = 6; } },
   { id: 'regen', name: '循环核心', desc: '能量回复 +30%', icon: '环', color: '#a86bff', apply: function (m) { m.energyRate *= 1.3; } },
   { id: 'crit', name: '破绽核心', desc: '暴击率 +14%', icon: '暴', color: '#ff3d81', apply: function (m) { m.crit += 0.14; } },
   { id: 'critmul', name: '处决核心', desc: '暴击伤害 +60%', icon: '决', color: '#ff4d5e', apply: function (m) { m.critMul += 0.6; } },
@@ -91,6 +92,7 @@ export function defaultMods() {
     dmg: 1, rate: 1, hp: 1,
     coreMax: 100, coreHeal: 0,
     energyMax: 3, energyRate: 1, energyGain: 0,
+    boardCap: 5,
     crit: 0.06, critMul: 2.0,
     extraSummon: 0, comboBonus: 1,
     unitRegen: 0, prismBias: 1,
@@ -103,7 +105,7 @@ export function rollCards(owned) {
   var avail = [], i;
   for (i = 0; i < CARD_POOL.length; i++) {
     var c = CARD_POOL[i];
-    if (owned[c.id] && (c.id === 'core' || c.id === 'energy')) continue; // 上限类只给一次
+    if (owned[c.id] && (c.id === 'core' || c.id === 'energy' || c.id === 'capacity')) continue; // 上限类只给一次
     avail.push(c);
   }
   RNG.shuffle(avail);
