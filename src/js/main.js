@@ -9,8 +9,10 @@ import { Game, STATE } from './game.js';
 import { UI } from './ui.js';
 import { Store } from './store.js';
 import { installStrategyLayer } from './strategy.js';
+import { installSafeAreaFix } from './safearea.js';
 
 installStrategyLayer(Game);
+installSafeAreaFix(Game);
 
 var STEP = 1 / 60;
 var MAX_SUB = 4;
