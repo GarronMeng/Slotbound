@@ -14,6 +14,7 @@ import { installProgression } from './progression.js';
 import { installV14 } from './v14.js';
 import { installV15 } from './v15.js';
 import { installV16 } from './v16.js';
+import { installV17 } from './v17.js';
 
 installStrategyLayer(Game);
 installSafeAreaFix(Game);
@@ -21,6 +22,7 @@ installProgression(Game);
 installV14(Game);
 installV15(Game);
 installV16(Game);
+installV17(Game);
 
 var STEP = 1 / 60;
 var MAX_SUB = 4;
