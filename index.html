@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="format-detection" content="telephone=no">
+<meta name="theme-color" content="#0b0616">
+<meta name="description" content="Slotbound 命运老虎机 · 竖屏塔防小游戏">
+<title>Slotbound · 命运老虎机</title>
+<link rel="stylesheet" href="./css/style.css?v=65ae524c">
+</head>
+<body>
+<div id="stage">
+  <canvas id="game"></canvas>
+
+  <!-- HUD -->
+  <div id="hud">
+    <div class="hud-row">
+      <div class="hud-left">
+        <div id="hud-wave" class="wave">第 1 / 20 波</div>
+        <div id="hud-wavename" class="wavename"></div>
+      </div>
+      <div class="hud-mid">
+        <div class="score-label">分数</div>
+        <div id="hud-score" class="score">0</div>
+      </div>
+      <div class="hud-right">
+        <button id="btn-pause" class="pill" type="button" aria-label="暂停">暂停</button>
+        <button id="btn-mute" class="pill" type="button" aria-label="静音" aria-pressed="false">静音</button>
+      </div>
+    </div>
+    <div class="corebar">
+      <div id="hud-core-fill" class="corefill"></div>
+      <span id="hud-core-txt" class="coretxt">100 / 100</span>
+    </div>
+  </div>
+
+  <!-- 拉杆 -->
+  <button id="spin-btn" type="button" aria-label="拉杆"><span id="spin-label">拉杆</span></button>
+
+  <!-- 标题界面 -->
+  <section id="screen-title" class="screen show">
+    <div class="panel title-panel">
+      <div class="logo">
+        <div class="logo-en">SLOTBOUND</div>
+        <div class="logo-cn">命运老虎机 · 竖屏塔防</div>
+      </div>
+      <div class="best-line">最高分 <b id="title-best">还没有纪录，快来第一个上榜</b></div>
+      <button id="btn-start" class="btn btn-primary" type="button">开始游戏</button>
+      <button id="btn-howto" class="btn btn-ghost" type="button">玩法说明</button>
+
+      <div id="howto" class="howto">
+        <div class="how-row"><span class="tag tag-gold">拉杆</span>点击右下角拉杆或按 <b>空格</b>，转动 3×3老虎机召唤单位。</div>
+        <div class="how-row"><span class="tag tag-cyan">连线</span>横排 / 竖排三连可一次召唤多个单位，九连同触发 <b>JACKPOT</b>。</div>
+        <div class="how-row"><span class="tag tag-magenta">吸收</span>战场默认只保留 <b>5 名主力</b>。重复兵种和满编后的新兵会自动成为材料，持续喂养主力升级。</div>
+        <div class="how-row"><span class="tag tag-green">防守</span>敌人自上而下推进，前排放盾卫 / 剑士，后排放弓手 / 法师 / 重炮；拖动单位可调整阵型。</div>
+        <div class="how-row"><span class="tag tag-orange">核心</span>核心生命归零即失败。升级时可抽到“扩编核心”，把主力上限提高到 6。</div>
+      </div>
+
+      <div class="hs-head">
+        <span>本地排行榜</span>
+        <button id="btn-clear-hs" class="link" type="button">清空</button>
+      </div>
+      <div id="hs-list" class="hs-list"></div>
+    </div>
+  </section>
+
+  <!-- 暂停 -->
+  <section id="screen-pause" class="screen">
+    <div class="panel">
+      <h2 class="panel-title">已暂停</h2>
+      <div id="pause-stats" class="stats"></div>
+      <button id="btn-resume" class="btn btn-primary" type="button">继续游戏</button>
+      <button id="btn-pause-restart" class="btn btn-ghost" type="button">重新开始</button>
+      <button id="btn-quit" class="btn btn-ghost" type="button">返回标题</button>
+    </div>
+  </section>
+
+  <!-- 结算 -->
+  <section id="screen-over" class="screen">
+    <div class="panel">
+      <h2 id="over-title" class="over-title">核心崩溃</h2>
+      <div id="over-stats" class="stats"></div>
+      <div id="over-rank" class="over-rank"></div>
+
+      <div class="name-row">
+        <label class="name-label" for="over-name">上榜昵称</label>
+        <div id="over-name" class="name-box">玩家</div>
+        <button id="btn-randname" class="btn btn-mini" type="button">随机</button>
+        <button id="btn-key-del" class="btn btn-mini" type="button">删除</button>
+      </div>
+      <div id="over-keys" class="keys"></div>
+
+      <div id="over-actions" class="actions">
+        <button id="btn-restart" class="btn btn-primary" type="button">再来一局</button>
+        <button id="btn-share" class="btn btn-accent" type="button">发布战绩</button>
+        <button id="btn-saveimg" class="btn btn-ghost" type="button">保存战绩图</button>
+        <button id="btn-home" class="btn btn-ghost" type="button">返回标题</button>
+      </div>
+      <div class="hint">按 R 可立即重开</div>
+    </div>
+  </section>
+
+  <!-- 选核心 -->
+  <section id="screen-reward" class="screen">
+    <div class="panel reward-panel">
+      <h2 id="reward-title" class="panel-title">选择一枚核心</h2>
+      <div id="reward-cards" class="cards"></div>
+    </div>
+  </section>
+
+  <div id="toast" role="status"></div>
+</div>
+<script src="./js/app.js?v=65ae524c"></script>
+</body>
+</html>
