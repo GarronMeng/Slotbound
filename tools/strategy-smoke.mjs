@@ -67,7 +67,7 @@ function clearUnits() {
 ui.startGame();
 assert('进入 PLAY', game.state === STATE.PLAY);
 assert('策略层已安装', Array.isArray(game._laneDoctrine));
-assert('安全区 v2 已安装', game.L.safeAreaVersion === 2, game.L.safeAreaVersion);
+assert('安全区 v3 已安装', game.L.safeAreaVersion === 3, game.L.safeAreaVersion);
 assert('战场顶部位于 HUD 下方', game.L.fieldTop >= 132, game.L.fieldTop);
 
 const probe = game.spawnEnemy('grunt', 0, game.L.fieldTop - 200, 1, 1);
@@ -127,6 +127,22 @@ game.tryDrop(r3, 2, 3);
 frames(2);
 assert('火力网被识别', game._laneDoctrine[2] && game._laneDoctrine[2].id === 'fire', game._laneDoctrine[2] && game._laneDoctrine[2].id);
 assert('火力网提高远程伤害', r1.dmg > r1._strategyBaseDmg, r1.dmg + '>' + r1._strategyBaseDmg);
+
+// iOS WebView 回归：奖励页退出后必须恢复同一套 Canvas / DOM 布局尺度。
+const scaleBeforeReward = game.scale;
+const expectedCanvasW = 390 * 2;
+game.openReward();
+assert('奖励页进入 REWARD', game.state === STATE.REWARD);
+game.pickCard(0);
+assert('选卡后回到 PLAY', game.state === STATE.PLAY);
+assert('选卡后 scale 保持手机布局', Math.abs(game.scale - scaleBeforeReward) < 0.001, game.scale + ' vs ' + scaleBeforeReward);
+assert('选卡后 px 与 scale×DPR 一致', Math.abs(game.px - game.scale * game.dpr) < 0.001, game.px + ' vs ' + (game.scale * game.dpr));
+assert('选卡后 Canvas 恢复完整宽度', game.canvas.width === expectedCanvasW, game.canvas.width + ' vs ' + expectedCanvasW);
+for (const u of game.units) {
+  const ex = game.L.gridX + (u.col + 0.5) * game.L.cellW;
+  const ey = game.L.gridY + (u.row + 0.5) * game.L.cellH;
+  assert('选卡后单位格子坐标同步', Math.abs(u.x - ex) < 0.01 && Math.abs(u.y - ey) < 0.01, u.type + ':' + u.x + ',' + u.y);
+}
 
 assert('无运行时 console/jsdom 错误', errors.length === 0, errors.join(' | '));
 console.log('\nstrategy smoke: all checks passed');
