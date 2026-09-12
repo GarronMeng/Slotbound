@@ -34,6 +34,9 @@ jobs:
       - name: Smoke test progression runtime
         run: node tools/progression-smoke.mjs
 
+      - name: Smoke test v1.4 preparation and slot control
+        run: node tools/v14-smoke.mjs
+
       - name: Validate XHS package
         run: npm run check
 
@@ -75,5 +78,5 @@ jobs:
           git rm -rf .
           cp -a /tmp/slotbound-pages/. .
           git add -A
-          git commit -m "Deploy v1.3 preview to GitHub Pages"
+          git commit -m "Deploy v1.4 preview to GitHub Pages"
           git push --force origin HEAD:gh-pages
