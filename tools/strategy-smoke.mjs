@@ -77,12 +77,13 @@ assert('怪物出生时完整身体位于安全区内', probe.y - probeRadius >=
 const probeIdx = game.enemies.live.indexOf(probe);
 if (probeIdx >= 0) { game.enemies.live.splice(probeIdx, 1); game.enemies.free.push(probe); }
 
+// 固定用较大波次验证高压路，避免拿开局剩余 3 个敌人的小样本做随机比例。
+game.startWave(7);
 assert('高压车道已生成', game._pressureLane >= 0 && game._pressureLane <= 2, game._pressureLane);
 let pressure = 0;
 for (const q of game.queue) if (q.lane === game._pressureLane) pressure++;
 assert('高压车道敌人占比明显更高', pressure / Math.max(1, game.queue.length) >= 0.45, pressure + '/' + game.queue.length);
 
-// 自动链式合成：4 个 Lv1 cannon -> 最终应出现 1 个 Lv3 cannon。
 clearUnits();
 for (let i = 0; i < 4; i++) game.placeUnit('cannon');
 assert('4 个单位已落位', game.units.length === 4, game.units.length);
@@ -91,7 +92,6 @@ const cannons = game.units.filter(u => u.type === 'cannon');
 assert('自动链式合成收敛', cannons.length === 1, cannons.map(u => u.level).join(','));
 assert('4×Lv1 合成到 Lv3', cannons[0].level === 3, cannons[0].level);
 
-// 不允许跨级吞并：Lv1 拖向 Lv2 应交换，而不是升级。
 clearUnits();
 const a = game.placeUnit('bow');
 const b = game.placeUnit('bow');
@@ -105,7 +105,6 @@ assert('跨级不会吞并 Lv1', lv1.level === lv1Level, lv1.level);
 assert('跨级不会升级 Lv2', lv2.level === lv2Level, lv2.level);
 assert('跨级操作改为交换', game.grid[lv2Cell.c][lv2Cell.r] === lv1 && game.grid[lv1Cell.c][lv1Cell.r] === lv2);
 
-// 盾阵：盾卫前排 + 远程后排，盾卫获得减伤、远程获得攻速。
 clearUnits();
 const guard = game.placeUnit('guard');
 const bow = game.placeUnit('bow');
@@ -116,7 +115,6 @@ assert('盾阵被识别', game._laneDoctrine[1] && game._laneDoctrine[1].id === 
 assert('盾卫获得减伤', guard._formationTaken < 1, guard._formationTaken);
 assert('后排获得攻速', bow.rate < bow._strategyBaseRate, bow.rate + '<' + bow._strategyBaseRate);
 
-// 火力网：同路 3 个远程，伤害获得加成。
 clearUnits();
 const r1 = game.placeUnit('bow');
 const r2 = game.placeUnit('mage');
@@ -128,7 +126,6 @@ frames(2);
 assert('火力网被识别', game._laneDoctrine[2] && game._laneDoctrine[2].id === 'fire', game._laneDoctrine[2] && game._laneDoctrine[2].id);
 assert('火力网提高远程伤害', r1.dmg > r1._strategyBaseDmg, r1.dmg + '>' + r1._strategyBaseDmg);
 
-// iOS WebView 回归：奖励页退出后必须恢复同一套 Canvas / DOM 布局尺度。
 const scaleBeforeReward = game.scale;
 const expectedCanvasW = 390 * 2;
 game.openReward();
