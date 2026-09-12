@@ -28,8 +28,8 @@ jobs:
       - name: Build game
         run: npm run build
 
-      - name: Smoke test runtime
-        run: npm test
+      - name: Smoke test v1.1 strategy runtime
+        run: node tools/strategy-smoke.mjs
 
       - name: Validate XHS package
         run: npm run check
