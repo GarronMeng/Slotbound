@@ -20,8 +20,6 @@ function roleScore(u) {
   return rowFit + killFit + hpFit;
 }
 
-// 吸收质量完全守恒：Lv1=1，Lv2=2，Lv3=4，Lv4=8，Lv5=16。
-// 因此 Lv4 吃 Lv2 会得到 10/16，而不是粗暴直接升 Lv5。
 function baseMass(level) {
   return Math.pow(2, Math.max(0, Math.min(MAX_LEVEL, level) - 1));
 }
@@ -113,6 +111,10 @@ function absorbUnit(game, src, dst, auto) {
     if (!auto) game.toast('不同兵种只能交换位置');
     return false;
   }
+  if (unitMass(dst) >= baseMass(MAX_LEVEL)) {
+    if (!auto) game.toast('目标已满级');
+    return false;
+  }
   var amount = unitMass(src);
   var label = (UNITS[src.type] ? UNITS[src.type].name : src.type) + '自动吸收';
   FX.burst(src.x, src.y, { count: 14, speed: 175, color: src.color, life: 0.45, size: 4 });
@@ -120,8 +122,12 @@ function absorbUnit(game, src, dst, auto) {
   return addMass(game, dst, amount, label);
 }
 
+function sameTypeUnits(game, type) {
+  return activeUnits(game).filter(function (u) { return u.type === type; });
+}
+
 function sameTypeCarry(game, type) {
-  var list = activeUnits(game).filter(function (u) { return u.type === type && unitMass(u) < baseMass(MAX_LEVEL); });
+  var list = sameTypeUnits(game, type).filter(function (u) { return unitMass(u) < baseMass(MAX_LEVEL); });
   if (!list.length) return null;
   list.sort(function (a, b) {
     var dm = unitMass(b) - unitMass(a);
@@ -160,7 +166,6 @@ function duplicatePair(game) {
     dst = list[0];
     src = list[list.length - 1];
     if (unitMass(dst) >= baseMass(MAX_LEVEL)) {
-      // 满级主力不再吞材料，尝试把其他同类互相合并。
       if (list.length < 3) continue;
       dst = list[1]; src = list[list.length - 1];
     }
@@ -280,7 +285,6 @@ function drawStrategyOverlay(game, ctx) {
     ctx.fillText('高压', x + L.cellW / 2, L.fieldTop + 15);
   }
 
-  // 只显示一个很轻的主力人数提示，强调“5 人小队”而不是把 12 格塞满。
   var alive = activeUnits(game).length;
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
   ctx.font = '800 12px ' + game.font;
@@ -356,7 +360,6 @@ export function installStrategyLayer(Game) {
     if (this.banner) this.banner.sub += ' · ' + LANE_NAME[this._pressureLane] + '高压';
   };
 
-  // 同兵种不再要求同等级；按“质量”吸收，完整保留成长价值。
   Game.prototype.doMerge = function (src, dst, auto) {
     var ok = absorbUnit(this, src, dst, auto);
     if (ok) refreshFormations(this);
@@ -365,15 +368,28 @@ export function installStrategyLayer(Game) {
 
   var origPlaceUnit = Game.prototype.placeUnit;
   Game.prototype.placeUnit = function (type, withFx) {
-    // 1) 场上已有同兵种：新兵直接作为材料，不再生成第二个重复单位。
+    var same = sameTypeUnits(this, type);
     var carry = sameTypeCarry(this, type);
-    if (carry) {
-      addMass(this, carry, 1, (UNITS[type] ? UNITS[type].name : type) + '新兵自动吸收');
-      refreshFormations(this);
-      return carry;
+
+    // 场上已有同兵种：永远作为材料处理，避免重复兵种重新占格。
+    if (same.length) {
+      if (carry) {
+        addMass(this, carry, 1, (UNITS[type] ? UNITS[type].name : type) + '新兵自动吸收');
+        refreshFormations(this);
+        return carry;
+      }
+      // 同兵种主力已满级，材料转喂其他未满级主力；全满级则转分数。
+      var overflowTarget = weakestFeedTarget(this);
+      if (overflowTarget) {
+        addMass(this, overflowTarget, 1, (UNITS[type] ? UNITS[type].name : type) + '溢出材料');
+        refreshFormations(this);
+        return overflowTarget;
+      }
+      this.addScore(180, this.L.slotCX, this.L.gridY - 30, C.cyan);
+      this.toast('主力全员满级 · 多余召唤 +180');
+      return null;
     }
 
-    // 2) 未达到 Slotbound 风格主力上限：正常加入队伍。
     var alive = activeUnits(this);
     if (alive.length < boardCap(this)) {
       var placed = origPlaceUnit.call(this, type, withFx);
@@ -385,7 +401,6 @@ export function installStrategyLayer(Game) {
       return placed;
     }
 
-    // 3) 已满员：新抽到的兵自动成为吸收材料，优先补最弱的非满级主力。
     var target = weakestFeedTarget(this);
     if (target) {
       addMass(this, target, 1, (UNITS[type] ? UNITS[type].name : type) + '材料自动吸收');
@@ -393,7 +408,6 @@ export function installStrategyLayer(Game) {
       return target;
     }
 
-    // 全员 Lv5 后，多余召唤转换为分数，避免死循环或无反馈。
     this.addScore(180, this.L.slotCX, this.L.gridY - 30, C.cyan);
     this.toast('主力全员满级 · 多余召唤 +180');
     return null;
@@ -406,9 +420,13 @@ export function installStrategyLayer(Game) {
     if (target && target !== u && target.type === u.type) {
       var src = unitMass(u) <= unitMass(target) ? u : target;
       var dst = src === u ? target : u;
-      var okAbsorb = absorbUnit(this, src, dst, false);
-      if (okAbsorb) refreshFormations(this);
-      return okAbsorb;
+      if (unitMass(dst) < baseMass(MAX_LEVEL)) {
+        var okAbsorb = absorbUnit(this, src, dst, false);
+        if (okAbsorb) refreshFormations(this);
+        return okAbsorb;
+      }
+      this.toast('目标已满级');
+      return false;
     }
     var ok = origTryDrop.call(this, u, c, r);
     if (ok) refreshFormations(this);
