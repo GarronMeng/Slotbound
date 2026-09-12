@@ -10,9 +10,11 @@ import { UI } from './ui.js';
 import { Store } from './store.js';
 import { installStrategyLayer } from './strategy.js';
 import { installSafeAreaFix } from './safearea.js';
+import { installProgression } from './progression.js';
 
 installStrategyLayer(Game);
 installSafeAreaFix(Game);
+installProgression(Game);
 
 var STEP = 1 / 60;
 var MAX_SUB = 4;
@@ -52,13 +54,20 @@ function boot() {
   }
 
   // ---------- 指针输入 ----------
+  // 轻点单位 = 查看/锁定/进化；拖动 = 调整阵型。
   var pointerDown = false;
+  var pointerStartX = 0, pointerStartY = 0;
+  var pointerMoved = false;
+  var pointerUnit = null;
 
   function onDown(cx, cy) {
     Sfx.init();
     if (game.state !== STATE.PLAY || game.paused) return;
     var p = toLogical(cx, cy);
     var u = game.pickAt(p.x, p.y);
+    pointerStartX = p.x; pointerStartY = p.y;
+    pointerMoved = false;
+    pointerUnit = u || null;
     if (u) {
       game._holdX = p.x; game._holdY = p.y;
       u.sync(game.L);
@@ -66,8 +75,11 @@ function boot() {
     pointerDown = true;
   }
   function onMove(cx, cy) {
-    if (!pointerDown || !game.held) return;
+    if (!pointerDown) return;
     var p = toLogical(cx, cy);
+    var dx = p.x - pointerStartX, dy = p.y - pointerStartY;
+    if (dx * dx + dy * dy > 100) pointerMoved = true;
+    if (!game.held) return;
     game._holdX = p.x; game._holdY = p.y;
     var cell = game.cellAt(p.x, p.y);
     if (cell) { game.cursor.c = cell.c; game.cursor.r = cell.r; }
@@ -75,10 +87,23 @@ function boot() {
   function onUp(cx, cy) {
     if (!pointerDown) return;
     pointerDown = false;
-    if (!game.held) return;
+    if (!game.held) { pointerUnit = null; return; }
     var p = toLogical(cx, cy);
+    var held = game.held;
+
+    if (!pointerMoved && pointerUnit === held && game.openUnitPanel) {
+      held.held = false;
+      game.held = null;
+      held.sync(game.L);
+      game._holdX = undefined; game._holdY = undefined;
+      pointerUnit = null;
+      game.openUnitPanel(held);
+      return;
+    }
+
     game.releaseAt(p.x, p.y);
     game._holdX = undefined; game._holdY = undefined;
+    pointerUnit = null;
   }
 
   var hasPointer = typeof window.PointerEvent !== 'undefined';
@@ -90,7 +115,7 @@ function boot() {
     });
     window.addEventListener('pointermove', function (e) { onMove(e.clientX, e.clientY); });
     window.addEventListener('pointerup', function (e) { onUp(e.clientX, e.clientY); });
-    window.addEventListener('pointercancel', function () { pointerDown = false; game.cancelHold(); });
+    window.addEventListener('pointercancel', function () { pointerDown = false; pointerUnit = null; game.cancelHold(); });
   } else {
     canvas.addEventListener('touchstart', function (e) {
       e.preventDefault();
@@ -107,7 +132,7 @@ function boot() {
       var t = e.changedTouches[0];
       onUp(t.clientX, t.clientY);
     }, { passive: false });
-    canvas.addEventListener('touchcancel', function () { pointerDown = false; game.cancelHold(); });
+    canvas.addEventListener('touchcancel', function () { pointerDown = false; pointerUnit = null; game.cancelHold(); });
     canvas.addEventListener('mousedown', function (e) { e.preventDefault(); onDown(e.clientX, e.clientY); });
     window.addEventListener('mousemove', function (e) { onMove(e.clientX, e.clientY); });
     window.addEventListener('mouseup', function (e) { onUp(e.clientX, e.clientY); });
@@ -137,6 +162,11 @@ function boot() {
       moveCursor(0, 1);
     } else if (k === 'e' || k === 'E') {
       toggleHold();
+    } else if (k === 'i' || k === 'I') {
+      if (game.state === STATE.PLAY && game.openUnitPanel) {
+        var inspect = game.grid[game.cursor.c][game.cursor.r];
+        if (inspect) game.openUnitPanel(inspect);
+      }
     } else if (k === 'p' || k === 'P' || k === 'Escape') {
       if (game.state === STATE.PLAY || game.state === STATE.PAUSE) game.togglePause();
     } else if (k === 'r' || k === 'R') {
@@ -200,7 +230,7 @@ function boot() {
     if (!last) last = ts;
     var dt = (ts - last) / 1000;
     last = ts;
-    if (dt > 0.25) dt = 0.25;      // 后台回来不要爆算
+    if (dt > 0.25) dt = 0.25;
     acc += dt;
     var n = 0;
     while (acc >= STEP && n < MAX_SUB) {
@@ -214,7 +244,6 @@ function boot() {
   }
   window.requestAnimationFrame(frame);
 
-  // 调试挂钩（不影响运行）
   window.SLOTBOUND = { game: game, ui: ui, FX: FX, Sfx: Sfx, STATE: STATE };
 }
 
