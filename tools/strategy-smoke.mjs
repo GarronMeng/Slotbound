@@ -1,4 +1,4 @@
-// strategy-smoke.mjs — v1.1 智能合成 / 阵型 / 高压车道运行验证
+// strategy-smoke.mjs — v1.1 智能合成 / 阵型 / 高压车道 / 安全区运行验证
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { readFileSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -42,7 +42,10 @@ win.requestAnimationFrame = () => 0;
 const stage = win.document.getElementById('stage');
 Object.defineProperty(stage, 'clientWidth', { value: 390, configurable: true });
 Object.defineProperty(stage, 'clientHeight', { value: 844, configurable: true });
-win.Element.prototype.getBoundingClientRect = () => ({ left: 0, top: 0, right: 390, bottom: 844, width: 390, height: 844, x: 0, y: 0 });
+win.Element.prototype.getBoundingClientRect = function () {
+  if (this.id === 'hud') return { left: 0, top: 0, right: 390, bottom: 96, width: 390, height: 96, x: 0, y: 0 };
+  return { left: 0, top: 0, right: 390, bottom: 844, width: 390, height: 844, x: 0, y: 0 };
+};
 Object.defineProperty(win, 'devicePixelRatio', { value: 2, configurable: true });
 
 win.eval(readFileSync(APP, 'utf8'));
@@ -64,6 +67,16 @@ function clearUnits() {
 ui.startGame();
 assert('进入 PLAY', game.state === STATE.PLAY);
 assert('策略层已安装', Array.isArray(game._laneDoctrine));
+assert('安全区 v2 已安装', game.L.safeAreaVersion === 2, game.L.safeAreaVersion);
+assert('战场顶部位于 HUD 下方', game.L.fieldTop >= 132, game.L.fieldTop);
+
+const probe = game.spawnEnemy('grunt', 0, game.L.fieldTop - 200, 1, 1);
+const probeRadius = probe.r * game.L.eScale;
+assert('怪物出生时完整身体位于安全区内', probe.y - probeRadius >= game.L.fieldTop + 10,
+  `top=${(probe.y - probeRadius).toFixed(1)} fieldTop=${game.L.fieldTop.toFixed(1)}`);
+const probeIdx = game.enemies.live.indexOf(probe);
+if (probeIdx >= 0) { game.enemies.live.splice(probeIdx, 1); game.enemies.free.push(probe); }
+
 assert('高压车道已生成', game._pressureLane >= 0 && game._pressureLane <= 2, game._pressureLane);
 let pressure = 0;
 for (const q of game.queue) if (q.lane === game._pressureLane) pressure++;
@@ -96,7 +109,6 @@ assert('跨级操作改为交换', game.grid[lv2Cell.c][lv2Cell.r] === lv1 && ga
 clearUnits();
 const guard = game.placeUnit('guard');
 const bow = game.placeUnit('bow');
-// 放到同一列，盾卫前排、弓手后排。
 if (guard.col !== 1 || guard.row !== 0) game.tryDrop(guard, 1, 0);
 if (bow.col !== 1 || bow.row !== 3) game.tryDrop(bow, 1, 3);
 frames(2);
