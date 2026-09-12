@@ -1,7 +1,7 @@
-// strategy.js — v1.1 智能合成 / 高压车道 / 阵型策略
+// strategy.js — v1.1 智能合成 / 高压车道 / 阵型策略 / 战场安全区
 'use strict';
 
-import { Unit } from './entities.js';
+import { Unit, Enemy } from './entities.js';
 import { C, UNITS, roundRect } from './theme.js';
 import { FX } from './fx.js';
 import { Sfx } from './audio.js';
@@ -85,15 +85,12 @@ function laneDoctrine(game, c) {
   }
   if (!lane.length) return null;
 
-  // 盾阵：盾卫顶前 + 至少 1 个远程。更稳，并让后排射得更快。
   if (front && front.type === 'guard' && ranged >= 1) {
     return { id: 'wall', name: '盾阵', color: C.green, desc: '前排减伤 · 后排攻速', units: lane };
   }
-  // 火力网：同路至少 3 个远程。牺牲覆盖面换集中输出。
   if (ranged >= 3) {
     return { id: 'fire', name: '火力网', color: C.cyan, desc: '本路远程伤害 +20%', units: lane };
   }
-  // 突击线：剑士顶前 + 至少 2 个远程，强调前后排协同。
   if (front && front.type === 'sword' && ranged >= 2) {
     return { id: 'rush', name: '突击线', color: C.gold, desc: '剑士爆发 · 后排增伤', units: lane };
   }
@@ -144,12 +141,37 @@ function smartMergeStep(game) {
   return false;
 }
 
+function applyBattlefieldSafeArea(game) {
+  var L = game.L;
+  if (!L || !L.fieldBottom) return;
+
+  // HUD 是 DOM 覆盖层，CSS 像素不会跟着 Canvas 逻辑坐标缩放。
+  // 84px 对应 HUD + 核心血条的实际高度，再留一段呼吸空间。
+  var hudSafe = Math.max(124, 84 / Math.max(0.45, game.scale || 1));
+  // 不侵占棋盘主体；极端矮屏至少保留一小段出生行军区。
+  var maxTop = Math.max(104, L.gridY - 44);
+  L.fieldTop = Math.min(hudSafe, maxTop);
+  L.fieldH = Math.max(1, L.fieldBottom - L.fieldTop);
+  L.enemyClipTop = L.fieldTop;
+  L.enemyClipBottom = L.fieldBottom - 2;
+}
+
+function clipBattlefield(game, ctx, draw) {
+  var L = game.L;
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(L.gridX - 8, L.enemyClipTop || L.fieldTop, L.gridW + 16,
+    Math.max(1, (L.enemyClipBottom || L.fieldBottom) - (L.enemyClipTop || L.fieldTop)));
+  ctx.clip();
+  draw();
+  ctx.restore();
+}
+
 function drawStrategyOverlay(game, ctx) {
   var L = game.L, c, doc, x, y, w, laneW;
   laneW = L.cellW - 14;
   y = L.gridY + 8;
 
-  // 高压车道：透明色带 + 标签，告诉玩家本波该把资源往哪里摆。
   if (game._pressureLane !== undefined && game._pressureLane >= 0) {
     x = L.gridX + game._pressureLane * L.cellW;
     ctx.fillStyle = 'rgba(255,61,129,0.055)';
@@ -157,10 +179,9 @@ function drawStrategyOverlay(game, ctx) {
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = '900 13px ' + game.font;
     ctx.fillStyle = C.magenta;
-    ctx.fillText('高压', x + L.cellW / 2, L.fieldTop + 13);
+    ctx.fillText('高压', x + L.cellW / 2, L.fieldTop + 15);
   }
 
-  // 阵型标签只在激活时显示，不增加常驻 UI 负担。
   for (c = 0; c < 3; c++) {
     doc = game._laneDoctrine && game._laneDoctrine[c];
     if (!doc) continue;
@@ -183,6 +204,12 @@ export function installStrategyLayer(Game) {
   if (INSTALLED) return;
   INSTALLED = true;
 
+  var origResize = Game.prototype.resize;
+  Game.prototype.resize = function (cw, ch, dpr) {
+    origResize.call(this, cw, ch, dpr);
+    applyBattlefieldSafeArea(this);
+  };
+
   var origReset = Game.prototype.reset;
   Game.prototype.reset = function () {
     origReset.call(this);
@@ -203,10 +230,21 @@ export function installStrategyLayer(Game) {
     return origHurt.call(this, dmg * (this._formationTaken || 1), game);
   };
 
+  // 敌人到核心前按完整碰撞体停住，避免大型怪物下半身进入老虎机 UI。
+  var origEnemyUpdate = Enemy.prototype.update;
+  Enemy.prototype.update = function (dt, game) {
+    origEnemyUpdate.call(this, dt, game);
+    if (this.state === 'core' && game && game.L) {
+      var L = game.L;
+      var visualRadius = this.r * L.eScale * Math.max(1, this.pop || 1);
+      var safeY = L.fieldBottom - visualRadius - 8;
+      if (this.y > safeY) this.y = safeY;
+    }
+  };
+
   var origStartWave = Game.prototype.startWave;
   Game.prototype.startWave = function (n) {
     origStartWave.call(this, n);
-    // 每波有一个可预判的高压车道；约 55% 敌人向该路集中，但仍保留随机性。
     this._pressureLane = (n * 2 + Math.floor(n / 3)) % 3;
     for (var i = 0; i < this.queue.length; i++) {
       if (((i * 7 + n * 11) % 20) < 11) this.queue[i].lane = this._pressureLane;
@@ -233,13 +271,11 @@ export function installStrategyLayer(Game) {
 
   var origPlaceUnit = Game.prototype.placeUnit;
   Game.prototype.placeUnit = function (type, withFx) {
-    // 先把场上已经成熟的对子清掉，避免“明明可合成却提示满场”。
     if (this.emptyCells().length === 0) {
       var existing = groupPairs(this);
       if (existing) this.doMerge(existing.src, existing.dst, true);
     }
 
-    // 仍然满场时，新召唤视作 Lv1；若已有同种 Lv1，直接智能吸收。
     if (this.emptyCells().length === 0) {
       var best = null;
       for (var i = 0; i < this.units.length; i++) {
@@ -268,7 +304,6 @@ export function installStrategyLayer(Game) {
   Game.prototype.tryDrop = function (u, c, r) {
     if (c < 0 || c >= this.grid.length || r < 0 || r >= this.grid[c].length) return false;
     var target = this.grid[c][r];
-    // 相同兵种但等级不同：不再错误跨级吞并，改为交换位置。
     if (target && target !== u && target.type === u.type && target.level !== u.level) {
       swapUnits(this, u, target);
       refreshFormations(this);
@@ -297,5 +332,12 @@ export function installStrategyLayer(Game) {
   Game.prototype.drawField = function (ctx) {
     origDrawField.call(this, ctx);
     drawStrategyOverlay(this, ctx);
+  };
+
+  // 敌人只允许画在战场可视区；出生阶段和核心阶段都不会穿到 DOM HUD / 底部老虎机下面。
+  var origDrawEnemies = Game.prototype.drawEnemies;
+  Game.prototype.drawEnemies = function (ctx) {
+    var self = this;
+    clipBattlefield(this, ctx, function () { origDrawEnemies.call(self, ctx); });
   };
 }
