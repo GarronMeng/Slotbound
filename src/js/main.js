@@ -8,6 +8,9 @@ import { Sfx, Music } from './audio.js';
 import { Game, STATE } from './game.js';
 import { UI } from './ui.js';
 import { Store } from './store.js';
+import { installStrategyLayer } from './strategy.js';
+
+installStrategyLayer(Game);
 
 var STEP = 1 / 60;
 var MAX_SUB = 4;
